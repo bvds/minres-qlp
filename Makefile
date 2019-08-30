@@ -64,8 +64,8 @@ ifeq ($(USEnag),yes)
 endif
 
 # Select one of these
-#FFLAGS  = ${FFLAGS1}    # for development
- FFLAGS  = ${FFLAGS2}    # for release
+FFLAGS  = ${FFLAGS1}    # for development
+# FFLAGS  = ${FFLAGS2}    # for release
 
 
   CC      =  gcc           # Not currently used

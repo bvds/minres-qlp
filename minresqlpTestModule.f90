@@ -361,14 +361,16 @@ contains
     end if
 
     if (use_default) then
-       call MINRESQLP( n=n, Aprod=Aprod, b=b, shift=shift, x=x, nout=nout, itn=itn )
+       call MINRESQLP( n, Aprod, b, shift, x=x, nout=nout, itn=itn )
     else
        if (precon) then
-         call MINRESQLP( n, Aprod, b, shift, Msolve, disable,                  &
-                       nout, itnlim, rtol, maxxnorm, trancond, Acondlim,       &
-                       x, istop, itn, rnorm, Arnorm, xnorm, Anorm, Acond )
+         call MINRESQLP( n, Aprod, b, shift, Msolve, disable=disable,            &
+                         nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,&
+                         trancond=trancond, Acondlim=Acondlim, x=x, istop=istop,&
+                         itn=itn, rnorm=rnorm, Arnorm=Arnorm, xnorm=xnorm,      &
+                         Anorm=Anorm, Acond=Acond )
        else
-         call MINRESQLP( n=n, Aprod=Aprod, b=b, shift=shift, disable=disable,   &
+         call MINRESQLP( n, Aprod, b, shift, disable=disable,                   &
                          nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,&
                          trancond=trancond, Acondlim=Acondlim, x=x, istop=istop,&
                          itn=itn, rnorm=rnorm, Arnorm=Arnorm, xnorm=xnorm,      &
@@ -557,8 +559,8 @@ contains
     end if
 
 
-    call MINRESQLP( n=n, Aprod=AprodMtxCDS, b=b, shift=shift, disable=disable,&
-                    nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,    &
+    call MINRESQLP( n, AprodMtxCDS, b, shift, disable=disable,                &
+                    nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,   &
                     trancond=trancond, Acondlim=Acondlim, x=x, istop=istop,   &
                     itn=itn, rnorm=rnorm, Arnorm=Arnorm, xnorm=xnorm,         &
                     Anorm=Anorm, Acond=Acond )
@@ -723,7 +725,7 @@ contains
  !                   nout, itnlim, rtol, maxxnorm, trancond, Acondlim,    &
  !                   x, istop, itn, rnorm, Arnorm, xnorm, Anorm, Acond )
 
-    call MINRESQLP( n=n, Aprod=AprodMtxCPS, b=b, shift=shift, disable=disable,&
+    call MINRESQLP( n, AprodMtxCPS, b, shift, disable=disable,                &
                     nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,   &
                     trancond=trancond, Acondlim=Acondlim, x=x, istop=istop,   &
                     itn=itn, rnorm=rnorm, Arnorm=Arnorm, xnorm=xnorm,         &
@@ -887,7 +889,7 @@ contains
     end if
 
 
-    call MINRESQLP( n=n, Aprod=AprodMtxCRS, b=b, shift=shift, disable=disable,&
+    call MINRESQLP( n, AprodMtxCRS, b, shift, disable=disable,                &
                     nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,   &
                     trancond=trancond, Acondlim=Acondlim, x=x, istop=istop,   &
                     itn=itn, rnorm=rnorm, Arnorm=Arnorm, xnorm=xnorm,         &

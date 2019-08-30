@@ -36,8 +36,8 @@ contains
 
   !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-  subroutine MINRESQLP( n, Aprod, b, shift, Msolve, disable, nout,        &
-                        itnlim, rtol, maxxnorm, trancond, Acondlim,       &
+  subroutine MINRESQLP( n, Aprod, b, shift, Msolve, userOrtho, disable,   &
+                        nout, itnlim, rtol, maxxnorm, trancond, Acondlim, &
                         x, istop, itn, rnorm, Arnorm, xnorm, Anorm, Acond )
     ! Inputs
     integer(ip), intent(in)             :: n
@@ -52,7 +52,7 @@ contains
     integer(ip), intent(out), optional  :: istop, itn
     real(dp),    intent(out), optional  :: rnorm, Arnorm, xnorm, Anorm, Acond
 
-    optional :: Msolve
+    optional :: Msolve, userOrtho
 
     interface
        subroutine Aprod(n,x,y)                    ! y := A*x
@@ -68,6 +68,13 @@ contains
          real(dp),    intent(in)    :: x(n)
          real(dp),    intent(out)   :: y(n)
        end subroutine Msolve
+
+       subroutine userOrtho(action,n,x)           ! Orthogonalize or store x 
+         use minresqlpDataModule
+         character,   intent(in)    :: action
+         integer(ip), intent(in)    :: n
+         real(dp),    intent(inout) :: x(n)
+       end subroutine userOrtho
     end interface
 
     !------------------------------------------------------------------
@@ -748,6 +755,9 @@ contains
        beta   = betan;
        s      = one / beta          ! Normalize previous vector (in y).
        v      = s*y;                ! v = vk if P = I.
+       if ( present(userOrtho) ) then
+          call userOrtho( 'a', n, v )
+       end if
        call Aprod ( n, v, y )
        if (shift_ /= zero) then
           y = y - shift_ * v
@@ -757,6 +767,9 @@ contains
        end if
        alfa = dot_product(v, y)                  ! alphak
        y    = y + (- alfa/beta) * r2
+       if ( present(userOrtho) ) then
+          call userOrtho( 'o', n, y )
+       end if
        r1   = r2
        r2   = y
 
