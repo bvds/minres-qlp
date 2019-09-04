@@ -36,7 +36,7 @@ contains
 
   !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-  subroutine MINRESQLP( n, Aprod, b, shift, Msolve, userOrtho, disable,   &
+  recursive subroutine MINRESQLP( n, Aprod, b, shift, Msolve, userOrtho, disable,   &
                         nout, itnlim, rtol, maxxnorm, trancond, Acondlim, &
                         x, istop, itn, rnorm, Arnorm, xnorm, Anorm, Acond )
     ! Inputs
@@ -69,7 +69,7 @@ contains
          real(dp),    intent(out)   :: y(n)
        end subroutine Msolve
 
-       subroutine userOrtho(action,n,x)           ! Orthogonalize or store x 
+       subroutine userOrtho(action,n,x)           ! Orthogonalize or store x
          use minresqlpDataModule
          character,   intent(in)    :: action
          integer(ip), intent(in)    :: n
