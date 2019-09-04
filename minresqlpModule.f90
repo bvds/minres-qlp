@@ -209,15 +209,12 @@ contains
     !                        components.  When normalized, x may be
     !                        closer to an eigenvector than b. Default to 0.
     !
-    !     nout    input      A file number. The calling program must open a file
-    !                        for output using for example:
+    !     nout    input      A unit identifier. The calling program may open a file
+    !                        for output using, for example:
     !                          open(nout, file='MINRESQLP.txt', status='unknown')
-    !                        If nout > 0, a summary of the iterations
-    !                        will be printed on unit nout. If nout is absent or
-    !                        the file associated with nout is not opened properly,
+    !                        A summary of the iterations will be printed on unit nout.
+    !                        If nout is not open or not supplied,
     !                        results will be written to 'MINRESQLP_tmp.txt'.
-    !                        (Avoid 0, 5, 6 because by convention stderr=0, 
-    !                        stdin=5, stdout=6.)
     !
     !     itnlim  input      An upper limit on the number of iterations. Default to 4n.
     !
@@ -454,8 +451,8 @@ contains
                     ul, ul_QLP, ul2, ul2_QLP, ul3, ul4,     &
                     vepln, vepln_QLP, veplnl, veplnl2, x1last
 
-    integer(ip)  :: j, QLPiter, headlines, lines, nprint, flag0, ios
-    logical      :: prnt, done, lastiter, connected, named_file, likeLS
+    integer(ip)  :: j, QLPiter, headlines, lines, nprint, flag0
+    logical      :: prnt, done, lastiter, connected, likeLS
     character(len=20) :: filename
     character(len=2)  :: QLPstr = ' '
 
@@ -531,24 +528,10 @@ contains
 
     if (present(nout)) then
        nout_ = nout
-       inquire(unit=nout, opened=connected, named=named_file, name=filename)
-       !write(*,*) connected, named_file, filename
-       if (.not. connected) then
-          write(*,*) "File unit 'nout' is not open."
-          if (nout==5  .or.  nout == 6) then
-             nout_ = 10
-          end if
-       end if
-    end if
-
+    endif
+    inquire(unit=nout_, opened=connected)
     if (.not. connected) then
-        write(*,*) 'nout_ = ', nout_
-        open(nout_, file=filename, status='unknown', iostat=ios)
-        write(*,*) 'ios = ', ios
-        if (ios /= 0) then
-           write(*,*) "Error opening file '", filename, "'."
-           STOP
-        end if
+        open(nout_, file=filename, status='unknown')
     end if
 
     if (present(rtol)) then
@@ -1254,19 +1237,25 @@ contains
        Acond = Acond_
     end if
 
-    if ( prnt ) then
-       write(nout_, itnStr) itn_, x(1), xnorm_, &
-             rnorm_, Arnorm_, relres, relAres, Anorm_, Acond_, QLPstr
-    end if
-
-    ! Display final status.
-
     if (nout_ > 0) then
+       if ( prnt ) then
+          write(nout_, itnStr) itn_, x(1), xnorm_, &
+               rnorm_, Arnorm_, relres, relAres, Anorm_, Acond_, QLPstr
+       end if
+
+       ! Display final status.
+
        write(nout_, finalStr1) exitt, 'istop =', istop_, 'itn    =', itn_,    &
                                exitt, 'Anorm =', Anorm_, 'Acond  =', Acond_,  &
                                exitt, 'rnorm =', rnorm_, 'Arnorm =', Arnorm_, &
                                exitt, 'xnorm =', xnorm_
        write(nout_, finalStr2) exitt, msg(istop_)
+
+       if (.not. connected) then
+          close(nout_)
+       else
+          call flush(nout_)
+       end if
     end if
 
     return
