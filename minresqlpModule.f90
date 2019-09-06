@@ -36,8 +36,8 @@ contains
 
   !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-  recursive subroutine MINRESQLP( n, Aprod, b, shift, Msolve, userOrtho, disable,   &
-                        nout, itnlim, rtol, maxxnorm, trancond, Acondlim, &
+  recursive subroutine MINRESQLP( n, Aprod, b, shift, Msolve, userOrtho, disable, &
+                        nout, itnlim, rtol, abstol, maxxnorm, trancond, Acondlim, &
                         x, istop, itn, rnorm, Arnorm, xnorm, Anorm, Acond )
     ! Inputs
     integer(ip), intent(in)             :: n
@@ -45,7 +45,7 @@ contains
     integer(ip), intent(in), optional   :: itnlim, nout
     logical,     intent(in), optional   :: disable
     real(dp),    intent(in), optional   :: shift
-    real(dp),    intent(in), optional   :: rtol, maxxnorm, trancond, Acondlim
+    real(dp),    intent(in), optional   :: rtol, abstol, maxxnorm, trancond, Acondlim
 
     ! Outputs
     real(dp),    intent(out)            :: x(n)
@@ -234,6 +234,16 @@ contains
     !
     !                        Default to machine precision.
     !
+    !    abstol   input      A user-specified tolerance.  MINRESQLP terminates
+    !                        if it appears that norm(rbar) is smaller than
+    !                        abstol, where rbar = bbar - Abar xbar.
+    !
+    !                        If shift = 0 and Msolve is absent, MINRESQLP
+    !                        terminates if norm(r) is smaller than abstol,
+    !                        where r = b - Ax,
+    !
+    !                        Default to zero (ignore). 
+    !
     !     istop   output     An integer giving the reason for termination...
     !               0        Initial value of istop.
     !
@@ -280,37 +290,41 @@ contains
     !                        This means that the least-squares solution is as
     !                        accurate as seems reasonable on this machine.
     !
-    !               8        The iteration limit was reached before convergence.
+    !               8        Norm(rbar) appears to be less than abstol.
+    !                        The solution in x should be an acceptable
+    !                        solution of Abar x = b.
     !
-    !               9        The matrix defined by Aprod does not appear
+    !               9        The iteration limit was reached before convergence.
+    !
+    !               10       The matrix defined by Aprod does not appear
     !                        to be symmetric.
     !                        For certain vectors y = Av and r = Ay, the
     !                        products y'y and r'v differ significantly.
     !
-    !               10       The matrix defined by Msolve does not appear
+    !               11       The matrix defined by Msolve does not appear
     !                        to be symmetric.
     !                        For vectors satisfying My = v and Mr = y, the
     !                        products y'y and r'v differ significantly.
     !
-    !               11       An inner product of the form  x' M**(-1) x
+    !               12       An inner product of the form  x' M**(-1) x
     !                        was not positive, so the preconditioning matrix
     !                        M does not appear to be positive definite.
     !
-    !               12       xnorm has exceeded maxxnorm or will exceed it
+    !               13       xnorm has exceeded maxxnorm or will exceed it
     !                        next iteration.
     !
-    !               13       Acond (see below) has exceeded Acondlim or 0.1/eps,
+    !               14       Acond (see below) has exceeded Acondlim or 0.1/eps,
     !                        so the matrix Abar must be very ill-conditioned.
     !
-    !               14       | gamma_k | < eps.
+    !               15       | gamma_k | < eps.
     !                        This is very likely a least-squares problem but
     !                        x may not contain an acceptable solution yet.
     !
-    !               15       norm(Abar x) < rtol * norm(Abar) * norm(x).
+    !               16       norm(Abar x) < rtol * norm(Abar) * norm(x).
     !                        If disable = .true., then a null vector will be
     !                        obtained, given rtol.
     !
-    !                        If istop >= 7, the final x may not be an
+    !                        If istop >= 9, the final x may not be an
     !                        acceptable solution.
     !
     !     itn     output     The number of iterations performed.
@@ -429,7 +443,7 @@ contains
 
     ! Local arrays and variables
     real(dp)     :: shift_
-    real(dp)     :: rtol_, maxxnorm_, trancond_, Acondlim_
+    real(dp)     :: rtol_, abstol_, maxxnorm_, trancond_, Acondlim_
     real(dp)     :: rnorm_, Arnorm_, xnorm_, Anorm_, Acond_
     logical      :: checkA_, precon_, disable_
     integer(ip)  :: itnlim_, nout_, istop_, itn_
@@ -461,7 +475,7 @@ contains
     real(dp)            :: NORMMAX = 10.0_dp**floor(log10(one/eps)/2)
     character(len=*), parameter :: enter = ' Enter MINRES-QLP.  '
     character(len=*), parameter :: exitt = ' Exit  MINRES-QLP.  '
-    character(len=*), parameter :: msg(1:15) =                                &
+    character(len=*), parameter :: msg(1:16) =                                &
       (/ 'beta_{k+1} < eps.                                                ', & ! 1
          'beta2 = 0.  If M = I, b and x are eigenvectors of A.             ', & ! 2
          'beta1 = 0.  The exact solution is  x = 0.                        ', & ! 3
@@ -469,14 +483,15 @@ contains
          'A solution to (poss. singular) Ax = b found, given eps.          ', & ! 5
          'Pseudoinverse solution for singular LS problem, given rtol.      ', & ! 6
          'Pseudoinverse solution for singular LS problem, given eps.       ', & ! 7
-         'The iteration limit was reached.                                 ', & ! 8
-         'The operator defined by Aprod appears to be unsymmetric.         ', & ! 9
-         'The operator defined by Msolve appears to be unsymmetric.        ', & ! 10
-         'The operator defined by Msolve appears to be indefinite.         ', & ! 11
-         'xnorm has exceeded maxxnorm or will exceed it next iteration.    ', & ! 12
-         'Acond has exceeded Acondlim or 0.1/eps.                          ', & ! 13
-         'Least-squares problem but no converged solution yet.             ', & ! 14
-         'A null vector obtained, given rtol.                              ' /) ! 15
+         'A solution to (poss. singular) Ax = b found, given abstol.       ', & ! 8
+         'The iteration limit was reached.                                 ', & ! 9
+         'The operator defined by Aprod appears to be unsymmetric.         ', & ! 10
+         'The operator defined by Msolve appears to be unsymmetric.        ', & ! 11
+         'The operator defined by Msolve appears to be indefinite.         ', & ! 12
+         'xnorm has exceeded maxxnorm or will exceed it next iteration.    ', & ! 13
+         'Acond has exceeded Acondlim or 0.1/eps.                          ', & ! 14
+         'Least-squares problem but no converged solution yet.             ', & ! 15
+         'A null vector obtained, given rtol.                              ' /) ! 16
 
      character(len=*), parameter :: ddebugStr1 = "(a, T5, i0, a, 5(e12.3))"
      character(len=*), parameter :: ddebugStr2 = "(5(a, i0, a, e12.3, a))"
@@ -486,6 +501,7 @@ contains
         "  / ' n        =', i7, 6x,  '||b||    =', e11.2, 3x,"  // &
         "     'precon   =', l4                           "      // &
         "  / ' itnlim   =', i7, 6x, 'rtol     =', e11.2, 3x,"   // &
+        "                           'abstol   =', e11.2, 3x,"   // &
         "     'shift    =', e23.14                       "      // &
         "  / ' maxxnorm =', e11.2, 2x, 'Acondlim =', e11.2, 3x,"// &
         "     'trancond =', e11.2)"
@@ -538,6 +554,12 @@ contains
        rtol_ = rtol
     else
        rtol_ = eps
+    end if
+
+    if (present(abstol)) then
+       abstol_ = abstol
+    else
+       abstol_ = 0.0
     end if
 
     if (prcsn == 6) then
@@ -593,7 +615,7 @@ contains
 
     if (nout_ > 0) then
        write(nout_, headerStr) enter, n, beta1, precon_, itnlim_, rtol_, &
-       shift_, maxxnorm_, Acondlim_, trancond_
+       abstol_, shift_, maxxnorm_, Acondlim_, trancond_
     end if
 
     !------------------------------------------------------------------
@@ -610,7 +632,7 @@ contains
     beta1  = dot_product(b, y)
 
     if (beta1 < zero .and. dnrm2(n, y, 1) > eps) then     ! M must be indefinite.
-       istop_ = 11
+       istop_ = 12
     end if
 
     if (beta1 == zero) then    ! b = 0 exactly.  Stop with x = 0.
@@ -634,7 +656,7 @@ contains
        z      = abs( s - t )
        epsa   = (abs(s) + eps) * eps**0.33333_dp
        if (z > epsa) then
-          istop_ = 10
+          istop_ = 11
        end if
     end if
 
@@ -649,7 +671,7 @@ contains
        z      = abs( s - t )
        epsa   = (abs(s) + eps) * eps**0.33333_dp
        if (z > epsa) then
-          istop_ = 9
+          istop_ = 10
        end if
     end if
 
@@ -764,7 +786,7 @@ contains
           if (betan > zero) then
              betan = sqrt(betan)
           elseif ( dnrm2(n, y, 1) > eps ) then   ! M must be indefinite.
-             istop_ = 11
+             istop_ = 12
              exit
           end if
        end if
@@ -927,11 +949,11 @@ contains
           vec2(2) = u
           if (likeLS  .and.  dnrm2(2, vec2, 1) > maxxnorm_) then
              u      = zero
-             istop_ = 12
+             istop_ = 13
           end if
        else
           u      = zero
-          istop_ = 14
+          istop_ = 15
        end if
        vec2(1)   = xl2norm
        vec2(2)   = ul2
@@ -953,7 +975,7 @@ contains
              x1last = x(1)
              x = x + tau*w
           else
-             istop_   = 12
+             istop_   = 13
              lastiter = .true.
           end if
 
@@ -1083,7 +1105,7 @@ contains
        Acond_   = Anorm_ / gmin
        rnorml   = rnorm_
        relresl  = relres
-       if (istop_ /= 14) rnorm_ = phi
+       if (istop_ /= 15) rnorm_ = phi
        relres   = rnorm_ / (Anorm_ * xnorm_ + beta1)
        vec2(1)  = gbar
        vec2(2)  = dltan
@@ -1106,7 +1128,7 @@ contains
        ! See if any of the stopping criteria are satisfied.
 
        epsx = Anorm_*xnorm_*eps
-       if (istop_ == flag0  .or.  istop_ == 14) then
+       if (istop_ == flag0  .or.  istop_ == 15) then
           t1   = one + relres
           t2   = one + relAresl
        end if
@@ -1116,16 +1138,18 @@ contains
           istop_ = 7                           ! Accurate LS solution
        else if (relres   <= rtol_     ) then
           istop_ = 4                           ! Good enough Ax=b solution
+       else if (rnorm_   <= abstol_   ) then
+          istop_ = 8                           ! User supplied stopping criterion.
        else if (relAresl <= rtol_     ) then
           istop_ = 6                           ! Good enough LS solution
        else if (epsx     >= beta1     ) then
           istop_ = 2                           ! x is an eigenvector
        else if (xnorm_    >= maxxnorm_) then
-          istop_ = 12                          ! xnorm exceeded its limit
+          istop_ = 13                          ! xnorm exceeded its limit
        else if (Acond_    >= Acondlim_ .or. Acond_ >= ieps) then
-          istop_ = 13                          ! Huge Acond
+          istop_ = 14                          ! Huge Acond
        else if (itn_      >= itnlim_  ) then
-          istop_ = 8                           ! Too many itns
+          istop_ = 9                           ! Too many itns
        else if (betan     <  eps      ) then
           istop_ = 1                           ! Last iteration of Lanczos, rarely happens
        end if
@@ -1134,14 +1158,14 @@ contains
           istop_ = flag0
           done   = .false.
           if (Axnorm < rtol_*Anorm_*xnorm_) then
-             istop_   = 15
+             istop_   = 16
              lastiter = .false.
           end if
        end if
 
        if (istop_ /= flag0) then
           done = .true.
-          if (istop_ == 6  .or.  istop_ == 7  .or.  istop_ == 12  .or.  istop_ == 13) then
+          if (istop_ == 6  .or.  istop_ == 7  .or.  istop_ == 13  .or.  istop_ == 14) then
              lastiter = .true.
           end if
           if (lastiter) then
