@@ -68,6 +68,9 @@ program minresqlpTestProgram
                                      minresqlptestMtxCPS, &
                                      minresqlptestMtxCRS, &
                                      symorthotest
+#ifdef USE_MPI
+  use mpi
+#endif
 
   implicit none
 
@@ -79,6 +82,10 @@ program minresqlpTestProgram
   real(dp)                    :: shift, pertM
   real(dp)                    :: a, b, c_true, s_true, r_true, tol, BIG, SMALL
   integer(ip), parameter      :: nCDS = 2, nCPS = 10, nCRS = 7
+#ifdef USE_MPI
+  integer (kind = 4) ierr
+#endif
+  integer (kind = 4) wrank, wsize
   character(len=*), parameter :: pathCDS = './DataMtx/CDS/', &
                                  pathCPS = './DataMtx/CPS/', &
                                  pathCRS = './DataMtx/CRS/'
@@ -113,16 +120,27 @@ program minresqlpTestProgram
   character(80)              :: input_file, output_file
   !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-  write(*,*) "integer and real precision:"
-  write(*,*) "ip =", ip
-  write(*,*) "dp =", dp
+#ifdef USE_MPI
+  call MPI_Init(ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, wsize, ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+#else
+  wsize = 1
+  wrank = 0
+#endif
+
+  if (wrank == 0) then
+     write(*,*) "integer and real precision:"
+     write(*,*) "ip =", ip
+     write(*,*) "dp =", dp
+  end if
 
   nout   = 10
   output_file = 'MINRESQLP.txt'
   open(nout, file=output_file, status='unknown', iostat=ios)
 
   if (ios /= 0) then
-    write(*,*) "Error opening file", trim(output_file)
+     write(*,*) "Error opening file", trim(output_file)
   end if
 
   if (dp <= -1) then
@@ -225,74 +243,97 @@ program minresqlpTestProgram
      use_default = .false.
      if (i > 1) use_default = .true.
 
-     write(nout,*) ' '
-     write(nout,*) ' MINRESQLP tests with use_default = ', use_default
+     if(wrank ==0) then
+        write(nout,*) ' '
+        write(nout,*) ' MINRESQLP tests with use_default = ', use_default
+     end if
 
      ! Test the unlikely tiny cases that often trip us up.
 
      n      = 1
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 01
-     call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 02
-
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 01
+        call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 02
+     end if
      n      = 2
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 03
-     call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 04
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 03
+        call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 04
+     end if
 
      n      = 3
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 05
-     call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 06
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 05
+        call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 06
+     end if
 
      n      = 4
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 07
-     call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 08
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 07
+        call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 08
+     end if
 
      ! Test small positive-definite and indefinite systems
      ! without preconditioners.  MINRESQLP should take n iterations.
 
      n      = 50
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 09
-     call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 10
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 09
+        call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 10
+     end if
 
      ! Test small positive-definite and indefinite systems with
      ! exact preconditioners.  MINRESQLP should take about n iterations.
 
      n      = 2
-     call minresqlptest( n, precon, zero , zero, sing, consis, use_default, nout ) ! Ex 11
-     call minresqlptest( n, precon, shift, zero, sing, consis, use_default, nout ) ! Ex 12
+     if (n .ge. wsize) then
+        call minresqlptest( n, precon, zero , zero, sing, consis, use_default, nout ) ! Ex 11
+        call minresqlptest( n, precon, shift, zero, sing, consis, use_default, nout ) ! Ex 12
+     end if
 
      n      = 50
-     call minresqlptest( n, precon, zero , zero, sing, consis, use_default, nout ) ! Ex 13
-     call minresqlptest( n, precon, shift, zero, sing, consis, use_default, nout ) ! Ex 14
+     if (n .ge. wsize) then
+        call minresqlptest( n, precon, zero , zero, sing, consis, use_default, nout ) ! Ex 13
+        call minresqlptest( n, precon, shift, zero, sing, consis, use_default, nout ) ! Ex 14
 
-     ! pertM makes the preconditioners incorrect in n/10 entries.
-     ! MINRESQLP should take about n/10 iterations.
+        ! pertM makes the preconditioners incorrect in n/10 entries.
+        ! MINRESQLP should take about n/10 iterations.
 
-     call minresqlptest( n, precon, zero , pertM, sing, consis, use_default, nout) ! Ex 15
-     call minresqlptest( n, precon, shift, pertM, sing, consis, use_default, nout) ! Ex 16
+        call minresqlptest( n, precon, zero , pertM, sing, consis, use_default, nout) ! Ex 15
+        call minresqlptest( n, precon, shift, pertM, sing, consis, use_default, nout) ! Ex 16
+     end if
 
      ! Singular consistent test case.
      sing   = .true.
      consis = .true.
 
      n      = 4
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 17
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 17
 
-     ! if shift = 0.25 or 0.5 and n =4, then the problem is inconsistent
-     shift  = 0.3_dp
-     call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 18
+        ! if shift = 0.25 or 0.5 and n =4, then the problem is inconsistent
+        shift  = 0.3_dp
+        call minresqlptest( n, normal, shift, zero, sing, consis, use_default, nout ) ! Ex 18
+     end if
 
      n      = 50
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 19
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 19
+     end if
 
      ! Singular inconsistent test case.
 
      consis = .false.
 
      n      = 4
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 20
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 20
+     end if
 
      n      = 50
-     call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 21
+     if (n .ge. wsize) then
+        call minresqlptest( n, normal, zero , zero, sing, consis, use_default, nout ) ! Ex 21
+     end if
   end do
 
   !------------------------------------------------------------------
@@ -304,8 +345,10 @@ program minresqlpTestProgram
   end if
 
   if (testMtx) then
-     write(nout,*) ' '
-     write(nout,*) ' MINRESQLP tests on MM CDS examples'
+     if(wrank == 0) then
+        write(nout,*) ' '
+        write(nout,*) ' MINRESQLP tests on MM CDS examples'
+     end if
 
      do j = 1, 2
         consis = .true.
@@ -316,8 +359,10 @@ program minresqlpTestProgram
         end do
      end do
 
-     write(nout,*) ' '
-     write(nout,*) ' MINRESQLP tests on MM CPS examples'
+     if(wrank ==0) then
+        write(nout,*) ' '
+        write(nout,*) ' MINRESQLP tests on MM CPS examples'
+     end if
 
      do j = 1, 2
         consis = .true.
@@ -328,8 +373,10 @@ program minresqlpTestProgram
         end do
      end do
 
-     write(nout,*) ' '
-     write(nout,*) ' MINRESQLP tests on MM CRS examples'
+     if(wrank ==0) then
+        write(nout,*) ' '
+        write(nout,*) ' MINRESQLP tests on MM CRS examples'
+     end if
 
      do j = 1, 2
         consis = .true.
@@ -341,11 +388,18 @@ program minresqlpTestProgram
      end do
   end if
 
-  write(*,*)
-  write(*,*) "Results are in output file  ", trim(output_file)
-  write(*,*) "Search the file for 'appear'"
-  write(*,*) "For example:    grep appear ", trim(output_file)
-  write(*,*)
+  if(wrank == 0) then
+     write(*,*)
+     write(*,*) "Results are in output file  ", trim(output_file)
+     write(*,*) "Search the file for 'appear'"
+     write(*,*) "For example:    grep appear ", trim(output_file)
+     write(*,*)
 
-  close( unit = nout )
+     close( unit = nout )
+  end if
+
+#ifdef USE_MPI
+  call MPI_Finalize(ierr)
+#endif
+
 end program minresqlpTestProgram

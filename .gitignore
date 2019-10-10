@@ -1,5 +1,6 @@
 *.o
 *.mod
 *~
-
+/MINRESQLP.txt
 /minresqlptest
+/minresqlptest_mpi

@@ -54,6 +54,12 @@ module minresqlpTestModule
   use  minresqlpDataModule,    only : dp, sp, ip, prcsn, eps, zero, one, debug
   use  minresqlpModule,        only : MINRESQLP, SYMORTHO
   use  minresqlpBlasModule,    only : dnrm2
+#ifdef USE_MPI
+  use  mpi
+  use  parallelBlasModule,     only : mpi_dnrm2
+#else
+#define mpi_dnrm2(A, B, C) dnrm2(A, B, C)
+#endif
   use  minresqlpReadMtxModule, only : ReadMtxSize, ReadMtx, nnzmax
 
   implicit none
@@ -75,6 +81,7 @@ module minresqlpTestModule
                                         ! to avoid having an exact preconditioner.
 
   integer(ip)               :: nnz      ! These ones are used by the
+  real(dp),    allocatable  :: gcol(:)  ! Gathered column, used by matrix prod.
   integer(ip), allocatable  :: indx(:)  ! Matrix Market Aprod routines
   integer(ip), allocatable  :: jndx(:)  ! AprodMtxCDS, AprodMtxCPS, AprodMtxCRS
   real(dp)   , allocatable  :: dval(:)  !
@@ -149,6 +156,11 @@ contains
     integer(ip), intent(in)  :: n
     real(dp),    intent(in)  :: x(n)
     real(dp),    intent(out) :: y(n)
+#ifdef USE_MPI
+    integer                  :: ierr
+#endif
+    integer                  :: wrank, wsize
+    integer(ip)              :: offset, lower, upper
 
     !-------------------------------------------------------------------
     ! AprodMtxCDS  computes y = A*x for some symmetric matrix A
@@ -159,22 +171,48 @@ contains
     integer(ip)  :: i, j, k
     real(dp)     :: d
 
+#ifdef USE_MPI
+    call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+    call MPI_Comm_size(MPI_COMM_WORLD, wsize, ierr)
+    offset = 0
+    do i=0,wsize-1
+       if(i==wrank) then
+          lower = offset
+          call MPI_BCAST(n, 1, MPI_INTEGER, i, &
+               MPI_COMM_WORLD, ierr)
+          call MPI_BCAST(x, n, MPI_DOUBLE, i, &
+               MPI_COMM_WORLD, ierr)
+          offset = offset + n
+       else
+          call MPI_BCAST(j, 1, MPI_INTEGER, i, &
+               MPI_COMM_WORLD, ierr)
+          call MPI_BCAST(gcol(offset + 1), j, MPI_DOUBLE, i, &
+               MPI_COMM_WORLD, ierr)
+          offset = offset + j
+       end if
+    end do
+#else
+    lower = 0
+#endif
+    do k = 1, n
+       gcol(k+lower) = x(k)
+    end do
+
     y(1:n) = zero
 
+    upper = n + lower
     do k = 1, nnz
        i = indx(k)
        j = jndx(k)
        d = dval(k)
-!      d = rval(k)
 
-       if (i > j) then          ! d = subdiagonal
-          y(i) = y(i) + d*x(j)
-          y(j) = y(j) + d*x(i)
-       else                     ! i = j, d = diagonal
-          y(i) = y(i) + d*x(i)
+       if(i > lower .and. i .le. upper) then
+          y(i - lower) = y(i - lower) + d*gcol(j)
+       endif
+       if (i > j .and. j > lower .and. j .le. upper) then
+          y(j - lower) = y(j - lower) + d*gcol(i)
        end if
 
-!      if (k <= 10) write(*,*) '  ', i, ' ', j, ' ', d,  ' ', y(i)
     end do
 
   end subroutine AprodMtxCDS
@@ -254,9 +292,9 @@ contains
 
   !+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-  subroutine minresqlptest( n, precon, shift, pertM, sing, consis, default, nout )
+  subroutine minresqlptest( globaln, precon, shift, pertM, sing, consis, default, nout )
 
-    integer(ip), intent(in)    :: n, nout
+    integer(ip), intent(in)    :: globaln, nout
     logical,     intent(in)    :: precon, sing, consis
     real(dp),    intent(in)    :: shift, pertM
     logical,     intent(in), optional :: default
@@ -269,12 +307,16 @@ contains
     intrinsic :: real, present
 
     ! Local arrays and variables
-    real(dp)    :: b(n), r1(n), w(n), x(n), xtrue(n), y(n)
+    real(dp), allocatable :: b(:), r1(:), w(:), x(:), xtrue(:), y(:)
     logical     :: disable, use_default
-    integer(ip) :: j, itnlim, istop, itn, nprint
+    integer(ip) :: n, j, itnlim, istop, itn, nprint, offset
     real(dp)    :: Anorm, Acond, Arnorm, rnorm, rtol, r1norm, xnorm
     real(dp)    :: enorm, etol, wnorm, xnormtrue
     real(dp)    :: maxxnorm, TranCond, Acondlim
+#ifdef USE_MPI
+    integer (kind = 4) ierr
+#endif
+    integer (kind = 4) wrank, wsize
 
     character(len=*), parameter ::  headerStr =                                   &
        "(// '-----------------------------------------------------'"    //        &
@@ -292,30 +334,56 @@ contains
     character(len=*), parameter ::  debugStr2 =                                   &
        "(// 'Solution  x', 1p, 4(i6, e14.6))"
 
-    write(nout, headerStr) shift, pertM
+#ifdef USE_MPI
+    call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+    call MPI_Comm_size(MPI_COMM_WORLD, wsize, ierr)
+#else
+    wrank = 0
+    wsize = 1
+#endif
+    ! partition array over mpi processes
+    if(wrank + 1 < wsize) then
+       n = globaln/wsize
+    else
+       n = globaln - (globaln/wsize)*(wsize-1)
+    endif
 
-    allocate( d(n) )           ! Array used in Aprod and Msolve to define A and M.
+    if (wrank == 0) then
+       write(nout, headerStr) shift, pertM
+    end if
+
+    allocate( d(n) )  ! Array used in Aprod and Msolve to define A and M.
+    allocate( b(n), r1(n), w(n), x(n), xtrue(n), y(n))
     Ashift = shift
     Mpert  = pertM
 
+    offset = wrank*(globaln/wsize)
     if (.not. sing) then
-      do j = 1, n                     ! Set d(*) to define A.
-         d(j) = real(j,dp)/real(n,dp) ! We don't want exact integers.
-         xtrue(j) = real(n+1-j,dp)    ! Set the true solution and the rhs
-      end do                          ! so that (A - shift*I)*xtrue = b.
+       do j = 1, n                    ! Set d(*) to define A.
+          d(j) = real(j + offset,dp)/real(globaln,dp) ! We don't want exact integers.
+          xtrue(j) = real(globaln+1-j-offset,dp) ! Set the true solution and the rhs
+       end do                         ! so that (A - shift*I)*xtrue = b.
     else
-      do j = 1, n-2                   ! Set d(*) to define A.
-         d(j) = real(j,dp)/real(n,dp) ! We don't want exact integers.
-         xtrue(j) = real(n+1-j,dp)    ! Set the true solution and the rhs
-      end do                          ! so that (A - shift*I)*xtrue = b.
-      d(n-1:n) = zero
-      xtrue(n-1:n) = zero
+       do j = 1,n                  ! Set d(*) to define A.
+          if (j+offset .le. globaln-2) then
+             d(j) = real(j + offset,dp)/real(globaln,dp) ! We don't want exact integers.
+             xtrue(j) = real(globaln+1-j-offset,dp)    ! Set the true solution and the rhs
+          else
+             ! Set the last two elements to zero
+             d(j) = zero
+             xtrue(j) = zero
+          end if
+       end do                          ! so that (A - shift*I)*xtrue = b.
     end if
 
     call Aprod (n,xtrue,b)   ! b = A*xtrue
     b      = b - shift*xtrue ! Now b = (A - shift*I)*xtrue
     if (.not. consis) then
-       b(n-1:n) = one        ! b not in the range of A
+       do j=1,n
+          if(offset+j .ge. globaln-1) then
+             b(j) = one        ! b not in the range of A
+          end if
+       end do
     end if
 
     !debug = .false.
@@ -332,7 +400,7 @@ contains
     end if
 
     disable  = .false.          ! Set other parameters and solve.
-    itnlim   = n*3
+    itnlim   = globaln*3
     rtol     = 1.0e-12_dp
     maxxnorm = 1.0e+8_dp
     TranCond = 1.0e+7_dp
@@ -381,7 +449,7 @@ contains
     if (debug) then
        call Aprod (n,x,y)       ! y = A*x
        r1     = b - y + shift*x ! Final residual r1 = b - (A - shift*I)*x.
-       r1norm = dnrm2(n,r1,1)
+       r1norm = mpi_dnrm2(n,r1,1)
        write(nout,debugStr1) r1norm
 
        nprint = min(n,20)
@@ -400,25 +468,27 @@ contains
     end if
 
     w      = x - xtrue            ! Print a clue about whether
-    wnorm  = dnrm2(n,w,1)         ! the solution looks OK.
-    xnormtrue = dnrm2(n,xtrue,1)
+    wnorm  = mpi_dnrm2(n,w,1)         ! the solution looks OK.
+    xnormtrue = mpi_dnrm2(n,xtrue,1)
     enorm  = wnorm/xnormtrue
 
     if (use_default) then
        etol   = 1e-6
     else
-       etol   = eps*n*Acond*10
+       etol   = eps*globaln*Acond*10
     end if
 
     if (prcsn == 6) then                     ! single precision is used
         etol = 1e-3_dp                       ! use a bigger etol
     end if
 
-    if (enorm <= etol) then
-       write(nout, footerStr1) n, itn, enorm
-    else
-       write(nout, footerStr2) n, itn, enorm
-    end if
+    if (wrank == 0) then
+       if (enorm <= etol) then
+          write(nout, footerStr1) globaln, itn, enorm
+       else
+          write(nout, footerStr2) globaln, itn, enorm
+       end if
+    endif
     !write(nout, *)  etol, use_default
     deallocate(d)                           ! Free work array
 
@@ -452,10 +522,15 @@ contains
     real(dp), allocatable  :: b(:), x(:), r1(:), w(:)
 
     logical        :: disable
-    integer(ip)    :: n, j, itn, itnlim, istop, inform
+    integer(ip)    :: n, j, itn, itnlim, istop, inform, offset
     real(dp)       :: shift, Anorm, Acond, Arnorm, rnorm, rtol, xnorm
     real(dp)       :: maxxnorm, TranCond, Acondlim
     real(dp)       :: test1, test2, tolcheck
+
+#ifdef USE_MPI
+    integer (kind = 4) ierr
+#endif
+    integer (kind = 4) wrank, wsize
 
     character(len=*), parameter :: headerStr =             &
        "(// '---------------------------------------'"  // &
@@ -472,8 +547,17 @@ contains
 !    character(len=*), parameter ::  debugStr2 = &
 !       "(// 'Solution  x', 4(i6, e14.6))"
 
-    write(nout, headerStr)
+#ifdef USE_MPI
+    call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+    call MPI_Comm_size(MPI_COMM_WORLD, wsize, ierr)
+#else
+    wrank = 0
+    wsize = 1
+#endif
 
+    if (wrank == 0) then
+       write(nout, headerStr)
+    endif
     call ReadMtxSize( input_file, input_unit, &
                       id, type, rep, field, symm, nrow, ncol, nnz )
     rewind( input_unit )
@@ -491,16 +575,26 @@ contains
     call ReadMtx( input_file, input_unit, &
                   id, rep, field, symm, nrow, ncol, nnz, &
                   indx, jndx, ival, rval, dval, cval )
+    !
+    !  For mpi, each node has the entire matrix,
+    !  but we divide the vectors up.
+    !
+    if(wrank + 1 < wsize) then
+       n = nrow/wsize
+    else
+       n = nrow - (nrow/wsize)*(wsize-1)
+    endif
 
-    n = nrow
+    allocate( gcol(nrow) )
     allocate( b(n) )
     allocate( x(n) )
     allocate( r1(n) )
     allocate( w(n) )
 
+    offset = wrank*(nrow/wsize)
     do j = 1, n
        b(j) = one    ! real(j,dp)/real(n,dp)
-       x(j) = real(j,dp)/n
+       x(j) = real(offset + j, dp)/nrow
     end do
 
     !write(nout,*) (j, b(j), j=1,5)  ! Print some of the solution
@@ -513,11 +607,11 @@ contains
     if (debug) then
       write(nout,*) 'consis     = ', consis
       write(nout,*) 'input_file = ', trim(input_file)
-      write(nout,*) 'n = ', n, '  nnz = ', nnz
+      write(nout,*) 'n = ', nrow, '  nnz = ', nnz
     end if
 
     disable  = .false.          ! Set other parameters and solve.
-    itnlim   = n*3
+    itnlim   = nrow*3
     rtol     = tol
     maxxnorm = 1.0e+8_dp
     TranCond = 1.0e+8_dp
@@ -535,7 +629,7 @@ contains
        call AprodMtxCDS(n,x,b)   ! b = A*x
        if (debug) then
          write(nout,*) ' '
-         write(nout,*) 'norm(b) =', dnrm2(n,b,1)
+         write(nout,*) 'norm(b) =', mpi_dnrm2(n,b,1)
          write(nout,*) 'Some of the x defining b'
          do j = 1, min(n,5)
             write(nout,*) j, x(j)
@@ -558,7 +652,6 @@ contains
                    ', maxxnorm = ', maxxnorm, ', TranCond = ', TranCond, ', Acondlim = ', Acondlim
     end if
 
-
     call MINRESQLP( n, AprodMtxCDS, b, shift, disable=disable,                &
                     nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,   &
                     trancond=trancond, Acondlim=Acondlim, x=x, istop=istop,   &
@@ -569,15 +662,17 @@ contains
     call xcheck( n, AprodMtxCDS, b, shift, x, Anorm, tolcheck, nout, &
                  test1, test2, inform )
 
-    if (inform <= 2) then
-       write(nout, footerStr1) n, itn, test1, test2
-    else
-       write(nout, footerStr2) n, itn, test1, test2
+    if (wrank == 0) then
+       if (inform <= 2) then
+          write(nout, footerStr1) nrow, itn, test1, test2
+       else
+          write(nout, footerStr2) nrow, itn, test1, test2
+       end if
     end if
 
     if (debug) then
       write(nout,*) ' '
-      write(nout,*) 'norm(x) =', dnrm2(n,x,1)
+      write(nout,*) 'norm(x) =', mpi_dnrm2(n,x,1)
       write(nout,*) 'Some of the computed x'
       do j = 1, min(n,5)
          write(nout,*) x(j)
@@ -585,7 +680,7 @@ contains
     end if
 
     deallocate( indx, jndx, ival, rval, dval, cval )
-    deallocate( b, x, r1, w )
+    deallocate( b, x, r1, w, gcol )
 
   end subroutine minresqlptestMtxCDS
 
@@ -622,6 +717,11 @@ contains
     real(dp)       :: maxxnorm, TranCond, Acondlim
     real(dp)       :: test1, test2, tolcheck
 
+#ifdef USE_MPI
+    integer (kind = 4) ierr
+#endif
+    integer (kind = 4) wrank
+
     character(len=*), parameter :: headerStr =             &
        "(// '---------------------------------------'"  // &
        "  / ' Test of MINRESQLP on an MM CPS matrix '"  // &
@@ -637,7 +737,15 @@ contains
 !    character(len=*), parameter ::  debugStr2 = &
 !       "(// 'Solution  x', 4(i6, e14.6))"
 
-    write(nout, headerStr)
+#ifdef USE_MPI
+    call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+#else
+    wrank = 0
+#endif
+
+    if (wrank == 0) then
+       write(nout, headerStr)
+    end if
 
     call ReadMtxSize( input_file, input_unit, &
                       id, type, rep, field, symm, nrow, ncol, nnz )
@@ -698,7 +806,7 @@ contains
        call AprodMtxCPS (n,x,b)   ! b = A*x
        if (debug) then
          write(nout,*) ' '
-         write(nout,*) 'norm(b) =', dnrm2(n,b,1)
+         write(nout,*) 'norm(b) =', mpi_dnrm2(n,b,1)
          write(nout,*) 'Some of the x defining b'
          do j = 1, min(n,5)
             write(nout,*) j, x(j)
@@ -735,15 +843,17 @@ contains
     call xcheck( n, AprodMtxCPS, b, shift, x, Anorm, tolcheck, nout, &
                  test1, test2, inform )
 
-    if (inform <= 2) then
-       write(nout, footerStr1) n, itn, test1, test2
-    else
-       write(nout, footerStr2) n, itn, test1, test2
+    if (wrank == 0) then
+       if (inform <= 2) then
+          write(nout, footerStr1) n, itn, test1, test2
+       else
+          write(nout, footerStr2) n, itn, test1, test2
+       end if
     end if
 
     if (debug) then
       write(nout,*) ' '
-      write(nout,*) 'norm(x) =', dnrm2(n,x,1)
+      write(nout,*) 'norm(x) =', mpi_dnrm2(n,x,1)
       write(nout,*) 'Some of the computed x'
       do j = 1, min(n,5)
          write(nout,*) j, x(j)
@@ -787,6 +897,11 @@ contains
     real(dp)       :: maxxnorm, TranCond, Acondlim
     real(dp)       :: test1, test2, tolcheck
 
+#ifdef USE_MPI
+    integer (kind = 4) ierr
+#endif
+    integer (kind = 4) wrank
+
     character(len=*), parameter :: headerStr =             &
        "(// '---------------------------------------'"  // &
        "  / ' Test of MINRESQLP on an MM CRS matrix '"  // &
@@ -802,7 +917,15 @@ contains
 !    character(len=*), parameter ::  debugStr2 = &
 !       "(// 'Solution  x', 4(i6, e14.6))"
 
-    write(nout, headerStr)
+#ifdef USE_MPI
+    call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+#else
+    wrank = 0
+#endif
+
+    if (wrank == 0) then
+       write(nout, headerStr)
+    end if
 
     call ReadMtxSize( input_file, input_unit, &
                       id, type, rep, field, symm, nrow, ncol, nnz )
@@ -865,7 +988,7 @@ contains
        call AprodMtxCRS (n,x,b)   ! b = A*x
        if (debug) then
          write(nout,*) ' '
-         write(nout,*) 'norm(b) =', dnrm2(n,b,1)
+         write(nout,*) 'norm(b) =', mpi_dnrm2(n,b,1)
          write(nout,*) 'Some of the x defining b'
          do j = 1, min(n,5)
             write(nout,*) j, x(j)
@@ -888,7 +1011,6 @@ contains
                    ', maxxnorm = ', maxxnorm, ', TranCond = ', TranCond, ', Acondlim = ', Acondlim
     end if
 
-
     call MINRESQLP( n, AprodMtxCRS, b, shift, disable=disable,                &
                     nout=nout, itnlim=itnlim, rtol=rtol, maxxnorm=maxxnorm,   &
                     trancond=trancond, Acondlim=Acondlim, x=x, istop=istop,   &
@@ -899,15 +1021,17 @@ contains
     call xcheck( n, AprodMtxCRS, b, shift, x, Anorm, tolcheck, nout, &
                  test1, test2, inform )
 
-    if (inform <= 2) then
-       write(nout, footerStr1) n, itn, test1, test2
-    else
-       write(nout, footerStr2) n, itn, test1, test2
+    if (wrank == 0) then
+       if (inform <= 2) then
+          write(nout, footerStr1) n, itn, test1, test2
+       else
+          write(nout, footerStr2) n, itn, test1, test2
+       end if
     end if
 
     if (debug) then
       write(nout,*) ' '
-      write(nout,*) 'norm(x) =', dnrm2(n,x,1)
+      write(nout,*) 'norm(x) =', mpi_dnrm2(n,x,1)
       write(nout,*) 'Some of the computed x'
       do j = 1, min(n,5)
          write(nout,*) j, x(j)
@@ -930,12 +1054,22 @@ contains
     ! 20 Aug 2012: First version of symorthotest.
     !-------------------------------------------------------------------
 
+#ifdef USE_MPI
+    integer (kind = 4) ierr
+#endif
+    integer (kind = 4) wrank
     real(dp)                    :: c, s, r, norm_diff
     real(dp)                    :: out(3), expected_out(3), relTol
     character(len=*), parameter :: footerStr1 = &
        "(// '  symortho  appears to be successful.  Relative error in [c,s,r] =', 1p, e8.1)"
     character(len=*), parameter :: footerStr2 = &
        "(// '  symortho  appears to have failed.    Relative error in [c,s,r] =', 1p, e8.1)"
+
+#ifdef USE_MPI
+    call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+#else
+    wrank = 0
+#endif
 
     call symortho( a, b, c, s, r )
 
@@ -949,19 +1083,21 @@ contains
        relTol = tol
     end if
 
-    write(nout,*)  ' '
-    write(nout,*)  '-----------------------------------------------------'
-    write(nout,*)  'Test of  SYMORTHO.'
-    write(nout,*)  '-----------------------------------------------------'
-    write(nout,*)  'a = ',  a, '  b = ', b,  '  relTol = ', relTol
-    write(nout,*)  ' '
-    write(nout,*)  '[c,s,r]      = ',  out
-    write(nout,*)  'true [c,s,r] = ',  expected_out
+    if (wrank == 0) then
+       write(nout,*)  ' '
+       write(nout,*)  '-----------------------------------------------------'
+       write(nout,*)  'Test of  SYMORTHO.'
+       write(nout,*)  '-----------------------------------------------------'
+       write(nout,*)  'a = ',  a, '  b = ', b,  '  relTol = ', relTol
+       write(nout,*)  ' '
+       write(nout,*)  '[c,s,r]      = ',  out
+       write(nout,*)  'true [c,s,r] = ',  expected_out
 
-    if (norm_diff < relTol) then
-       write(nout,footerStr1) norm_diff
-    else
-       write(nout,footerStr2) norm_diff
+       if (norm_diff < relTol) then
+          write(nout,footerStr1) norm_diff
+       else
+          write(nout,footerStr2) norm_diff
+       end if
     end if
 
   end subroutine symorthotest
@@ -1031,10 +1167,10 @@ contains
     call Aprod(n,r,v)        ! v = Ar
     v      = v - shift*r     ! v = (A - shift*I)r = Ar - shift*r
 
-    bnorm  = dnrm2 (n,b,1)   ! Compute the norms of b, x, r, v.
-    xnorm  = dnrm2 (n,x,1)
-    rnorm  = dnrm2 (n,r,1)
-    sigma  = dnrm2 (n,v,1)
+    bnorm  = mpi_dnrm2 (n,b,1)   ! Compute the norms of b, x, r, v.
+    xnorm  = mpi_dnrm2 (n,x,1)
+    rnorm  = mpi_dnrm2 (n,r,1)
+    sigma  = mpi_dnrm2 (n,v,1)
 
     if (debug) then
       if (nout > 0) write(nout,2200) shift, Anorm, xnorm, bnorm, rnorm, sigma

@@ -26,6 +26,13 @@ module minresqlpModule
 
   use  minresqlpDataModule, only : dp, ip, one, zero, eps, realmin, prcsn, debug
   use  minresqlpBlasModule, only : dnrm2
+#ifdef USE_MPI
+  use  mpi
+  use  parallelBlasModule, only : mpi_dnrm2, mpi_dot
+#else
+#define mpi_dot(A, B, C) dot_product(B, C)
+#define mpi_dnrm2(A, B, C) dnrm2(A, B, C)
+#endif
 
   implicit none
 
@@ -466,6 +473,7 @@ contains
                     vepln, vepln_QLP, veplnl, veplnl2, x1last
 
     integer(ip)  :: j, QLPiter, headlines, lines, nprint, flag0
+    integer      :: wrank, ierr, globaln, mistop
     logical      :: prnt, done, lastiter, connected, likeLS
     character(len=20) :: filename
     character(len=2)  :: QLPstr = ' '
@@ -516,6 +524,15 @@ contains
         " /     a, 5x, a, e12.4 )"
      character(len=*), parameter :: finalStr2 = "(      a, 5x, a )"
 
+#ifdef USE_MPI
+     call MPI_Comm_rank(MPI_COMM_WORLD, wrank, ierr)
+     call mpi_allreduce(n, globaln, 1, MPI_INTEGER, MPI_SUM, &
+          MPI_COMM_WORLD, ierr)
+#else
+     wrank = 0
+     globaln = n
+#endif
+
     !------------------------------------------------------------------
     ! Optional inputs
     if (present(shift)) then
@@ -535,7 +552,7 @@ contains
     if (present(itnlim)) then
        itnlim_ = itnlim
     else
-       itnlim_ = 4 * n
+       itnlim_ = 4 * globaln
     end if
 
     connected = .false.
@@ -597,7 +614,7 @@ contains
     lastiter = .false.
     flag0    = 0
     istop_   = flag0
-    beta1    = dnrm2(n, b, 1)
+    beta1    = mpi_dnrm2(n, b, 1)
     ieps     = 0.1_dp/eps
     itn_     = 0
     QLPiter  = 0
@@ -613,8 +630,8 @@ contains
     xl2      = zero
     x1last   = x(1)
 
-    if (nout_ > 0) then
-       write(nout_, headerStr) enter, n, beta1, precon_, itnlim_, rtol_, &
+    if (nout_ > 0 .and. wrank==0) then
+       write(nout_, headerStr) enter, globaln, beta1, precon_, itnlim_, rtol_, &
        abstol_, shift_, maxxnorm_, Acondlim_, trancond_
     end if
 
@@ -629,9 +646,9 @@ contains
        call Msolve( n, b, y )
     end if
 
-    beta1  = dot_product(b, y)
+    beta1  = mpi_dot(n, b, y)
 
-    if (beta1 < zero .and. dnrm2(n, y, 1) > eps) then     ! M must be indefinite.
+    if (beta1 < zero .and. mpi_dnrm2(n, y, 1) > eps) then     ! M must be indefinite.
        istop_ = 12
     end if
 
@@ -651,8 +668,8 @@ contains
     !------------------------------------------------------------------
     if (checkA_  .and.  precon_) then
        call Msolve( n, y, r2 )
-       s      = dot_product( y, y )
-       t      = dot_product(r1, r2)
+       s      = mpi_dot(n,  y, y )
+       t      = mpi_dot(n, r1, r2)
        z      = abs( s - t )
        epsa   = (abs(s) + eps) * eps**0.33333_dp
        if (z > epsa) then
@@ -666,8 +683,8 @@ contains
     if (checkA_) then
        call Aprod ( n, y, w  )  ! w  = A*y
        call Aprod ( n, w, r2 )  ! r2 = A*w
-       s      = dot_product( w, w )
-       t      = dot_product( y, r2)
+       s      = mpi_dot(n,  w, w )
+       t      = mpi_dot(n,  y, r2)
        z      = abs( s - t )
        epsa   = (abs(s) + eps) * eps**0.33333_dp
        if (z > epsa) then
@@ -770,7 +787,7 @@ contains
        if (itn_ >= 2) then
           y = y + (- beta/betal) * r1
        end if
-       alfa = dot_product(v, y)                  ! alphak
+       alfa = mpi_dot(n, v, y)                  ! alphak
        y    = y + (- alfa/beta) * r2
        if ( present(userOrtho) ) then
           call userOrtho( 'o', n, y )
@@ -779,13 +796,13 @@ contains
        r2   = y
 
        if ( .not. precon_ ) then
-          betan = dnrm2(n, y, 1)                 ! betan = ||y||_2
+          betan = mpi_dnrm2(n, y, 1)                 ! betan = ||y||_2
        else
           call Msolve( n, r2, y )
-          betan = dot_product(r2, y)             ! betan = betak+1^2
+          betan = mpi_dot(n, r2, y)             ! betan = betak+1^2
           if (betan > zero) then
              betan = sqrt(betan)
-          elseif ( dnrm2(n, y, 1) > eps ) then   ! M must be indefinite.
+          elseif ( mpi_dnrm2(n, y, 1) > eps ) then   ! M must be indefinite.
              istop_ = 12
              exit
           end if
@@ -1163,6 +1180,17 @@ contains
           end if
        end if
 
+#ifdef USE_MPI
+       ! Sanity test:  make sure all are in agreement on status
+       mistop = istop_
+       call mpi_bcast(mistop, 1, MPI_INTEGER, 0, &
+            MPI_COMM_WORLD, ierr)
+       if(mistop .ne. istop_) then
+          write(*,*)'inconsistent values: ', istop_, mistop, wrank
+          call mpi_abort(MPI_COMM_WORLD, 1, ierr)
+       end if
+#endif
+
        if (istop_ /= flag0) then
           done = .true.
           if (istop_ == 6  .or.  istop_ == 7  .or.  istop_ == 13  .or.  istop_ == 14) then
@@ -1179,7 +1207,7 @@ contains
           r1  = b - r1 + shift_*x       ! r1 to temporarily store residual vector
           call Aprod ( n, r1, wl2 )     ! wl2 to temporarily store A*r1
           wl2 = wl2 - shift_*r1
-          Arnorm_ = dnrm2(n, wl2, 1)
+          Arnorm_ = mpi_dnrm2(n, wl2, 1)
           if (rnorm_ > zero  .and.  Anorm_ > zero) then
              relAres = Arnorm_ / (Anorm_*rnorm_)
           end if
@@ -1206,7 +1234,7 @@ contains
 
        if (nout_ > 0) then
           prnt   = .false.
-          if (n              <= 40          ) prnt = .true.
+          if (globaln        <= 40          ) prnt = .true.
           if (itn_           <= 10          ) prnt = .true.
           if (itn_           >= itnlim_ - 10) prnt = .true.
           if (mod(itn_-1,10) == 0           ) prnt = .true.
@@ -1214,7 +1242,7 @@ contains
           if (Acond_         >= 0.01_dp/eps ) prnt = .true.
           if (istop_         /= flag0       ) prnt = .true.
 
-          if ( prnt ) then
+          if ( prnt .and. wrank==0 ) then
              if (itn_ == 1) write(nout_, tableHeaderStr)
              write(nout_, itnStr) itn_-1, x1last, xnorml, &
              rnorml, Arnorml, relresl, relAresl, Anorml, Acondl, QLPstr
@@ -1262,19 +1290,20 @@ contains
     end if
 
     if (nout_ > 0) then
-       if ( prnt ) then
+       if ( prnt .and. wrank==0 ) then
           write(nout_, itnStr) itn_, x(1), xnorm_, &
                rnorm_, Arnorm_, relres, relAres, Anorm_, Acond_, QLPstr
        end if
 
        ! Display final status.
 
-       write(nout_, finalStr1) exitt, 'istop =', istop_, 'itn    =', itn_,    &
-                               exitt, 'Anorm =', Anorm_, 'Acond  =', Acond_,  &
-                               exitt, 'rnorm =', rnorm_, 'Arnorm =', Arnorm_, &
-                               exitt, 'xnorm =', xnorm_
-       write(nout_, finalStr2) exitt, msg(istop_)
-
+       if (wrank == 0) then
+          write(nout_, finalStr1) exitt, 'istop =', istop_, 'itn    =', itn_,    &
+               exitt, 'Anorm =', Anorm_, 'Acond  =', Acond_,  &
+               exitt, 'rnorm =', rnorm_, 'Arnorm =', Arnorm_, &
+               exitt, 'xnorm =', xnorm_
+          write(nout_, finalStr2) exitt, msg(istop_)
+       end if
        if (.not. connected) then
           close(nout_)
        else

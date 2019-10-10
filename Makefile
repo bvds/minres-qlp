@@ -27,11 +27,11 @@
 # Set exactly one of these to yes
 # (Extend the list if necessary)
 
-  USEg95        = no
-  USEgfortran   = yes
-  USEgeneric90  = no
-  USEgeneric    = no
-  USEnag        = no
+USEg95        = no
+USEgfortran   = yes
+USEgeneric90  = no
+USEgeneric    = no
+USEnag        = no
 
 ifeq ($(USEg95),yes)
   FC      =  g95
@@ -41,14 +41,18 @@ endif
 
 ifeq ($(USEgfortran),yes)
   FC      =  gfortran
+# Open MPI 1.7+ uses mpifort
+  MPIFC   =  mpifort
+  FFLAGS  =  -I/opt/intel/mkl/include -cpp
   FFLAGS1 = -g -O0 -pedantic -Wall -W -fbounds-check
-  FFLAGS2 = -g -O
+  FFLAGS2 = -g -O3
+  LFLAGS = -L/opt/intel/mkl/lib/intel64/ -Wl,--no-as-needed -lmkl_gf_lp64 -lmkl_sequential -lmkl_core
 endif
 
 ifeq ($(USEgeneric),yes)
   FC      =  f95
-  FFLAGS1 = -g -O0
-  FFLAGS2 = -g -O
+  FFLAGS1 = -g -O0 -cpp
+  FFLAGS2 = -g -O -cpp
 endif
 
 ifeq ($(USEgeneric90),yes)
@@ -64,25 +68,27 @@ ifeq ($(USEnag),yes)
 endif
 
 # Select one of these
-FFLAGS  = ${FFLAGS1}    # for development
-# FFLAGS  = ${FFLAGS2}    # for release
+#FFLAGS  += ${FFLAGS1}    # for development
+FFLAGS  += ${FFLAGS2}    # for release
 
 
-  CC      =  gcc           # Not currently used
-  CFLAGS  = -g -O
+%.o: %.f90
+	${FC} ${FFLAGS} -c -o $@ $<
+%_mpi.o: %.f90
+	${MPIFC} ${FFLAGS} -DUSE_MPI -c -o $@ $<
 
-# Clear suffix list, then define the ones we want
-  .SUFFIXES:
-  .SUFFIXES: .c .f .f90 .o
+files = minresqlpDataModule.o minresqlpBlasModule.o minresqlpModule.o mm_ioModule.o minresqlpReadMtxModule.o minresqlpTestModule.o minresqlpTestProgram.o
 
-  .f90.o:; ${FC} ${FFLAGS} -c -o $@ $<
-  .f.o:;   ${FC} ${FFLAGS} -c -o $@ $<
-  .c.o:;   $(CC) $(CFLAGS) -c -o $@ $<
+pfiles = minresqlpDataModule.o parallelBlasModule_mpi.o minresqlpBlasModule.o minresqlpModule_mpi.o mm_ioModule.o minresqlpReadMtxModule.o minresqlpTestModule_mpi.o minresqlpTestProgram_mpi.o
 
-  files = minresqlpDataModule.o minresqlpBlasModule.o minresqlpModule.o mm_ioModule.o minresqlpReadMtxModule.o minresqlpTestModule.o minresqlpTestProgram.o
+serial: minresqlptest
+parallel: minresqlptest_mpi
 
 minresqlptest: ${files}
-	${FC} ${FFLAGS} -o $@ ${files}
+	${FC} ${FFLAGS} ${LFLAGS} -o $@ ${files}
+
+minresqlptest_mpi: ${pfiles}
+	${MPIFC} ${FFLAGS} -lmpi ${LFLAGS} -o $@ ${pfiles}
 
 clean:
-	\rm -f *.o *.mod *.exe minresqlptest minresqlp.mexmaci64 
+	rm -f *.o *.mod minresqlptest minresqlptest_mpi

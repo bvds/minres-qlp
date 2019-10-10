@@ -2,7 +2,8 @@
 
 This is a fork of the Sept. 2013 version of
 [MINRES-QLP](https://web.stanford.edu/group/SOL/software/minresqlp/)
-from Stanford University.
+from Stanford University.  It includes a parallel version for
+symmetric matrices.
 
 
 ## SOURCE CODE
@@ -18,14 +19,22 @@ The source code for MINRESQLP is the following files:
     minresqlpTestModule.f90            zminresqlpTestModule.f90  
     minresqlpTestProgram.f90           zminresqlpTestProgram.f90  
 
-
 ## SYMMETRIC PROBLEMS
 
 To compile the real code and run the test program on Linux or Unix,
 proceed as follows:
 
-    make
+    make serial
     ./minresqlptest
+
+For the parallel version:
+
+    make parallel
+    mpirun -np <np> ./minresqlptest_mpi
+
+In either case, the test results are written to the
+file `MINRESQLP.txt`.  
+
     grep appears MINRESQLP.txt | cat -n
 
 "symortho  appears to be successful" should occur 10 times.  
