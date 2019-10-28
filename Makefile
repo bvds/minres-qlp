@@ -43,10 +43,19 @@ ifeq ($(USEgfortran),yes)
   FC      =  gfortran
 # Open MPI 1.7+ uses mpifort
   MPIFC   =  mpifort
-  FFLAGS  =  -I/opt/intel/mkl/include -cpp
   FFLAGS1 = -g -O0 -pedantic -Wall -W -fbounds-check
   FFLAGS2 = -g -O3
+#
+#  On AMD Epyc, add flags suggested by
+#  http://www.prace-ri.eu/best-practice-guide-amd-epyc
+#
+ifeq ($(shell lscpu|grep -m 1 -c -i epyc),1)
+FFLAGS += -march=znver1 -mtune=znver1 -mfma -mavx2 -m3dnow -fomit-frame-pointer
+else
+# Assume non-EPYC is Intel and use MKL:
+  FFLAGS = -I/opt/intel/mkl/include -cpp
   LFLAGS = -L/opt/intel/mkl/lib/intel64/ -Wl,--no-as-needed -lmkl_gf_lp64 -lmkl_sequential -lmkl_core
+endif
 endif
 
 ifeq ($(USEgeneric),yes)
