@@ -14,7 +14,21 @@ module parallelBlasModule
   implicit none
 
   public   :: mpi_dot, mpi_dnrm2
+#ifdef USE_MKL
   include 'mkl_blas.fi'
+#else
+  !
+  !  from "cblas.h"
+  !  double cblas_ddot(f77_int N, const double *X, f77_int incX,
+  !                const double *Y, f77_int incY);
+  interface
+     double precision function ddot(N, X, incX, Y, incY)
+       use iso_c_binding
+       integer :: N, incX, incY
+       double precision :: X(N), Y(N)
+     end function ddot
+  end interface
+#endif
 
 contains
 
@@ -26,13 +40,13 @@ contains
 ! This is intended to be an MPI extension of the Fortran
 ! function dot_product
 
-      real(dp) function mpi_dot(n, dx, dy)
+    real(dp) function mpi_dot(n, dx, dy)
 
       implicit none
       integer(ip), intent(in) :: n
       real(dp),    intent(in) :: dx(*), dy(*)
 
-      integer :: ierr
+      integer     :: ierr
       real(dp)    :: dtemp
 
       dtemp = ddot(n, dx, 1, dy, 1)
